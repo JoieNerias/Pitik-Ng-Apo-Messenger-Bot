@@ -1,1 +1,14 @@
 
+{
+  "name": "pitik-ng-apo-messenger-bot",
+  "version": "1.0.0",
+  "description": "AI Messenger Bot for Pitik ng Apo",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
+
