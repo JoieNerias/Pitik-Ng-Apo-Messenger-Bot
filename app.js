@@ -52,7 +52,7 @@ const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
 const GRAPH_API_VERSION = process.env.GRAPH_API_VERSION;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
-const GEMINI_MODEL = "gemini-3.1-flash-lite";
+const GEMINI_MODEL = "gemini-3.5-flash-lite";
 
 const SYSTEM_PROMPT = `
 Ikaw ang friendly at professional na AI customer service assistant
