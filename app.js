@@ -14,7 +14,39 @@ const db = admin.firestore();
 
 console.log("Firebase connected successfully!");
 
-// Customer conversation memory
+// ENVIRONMENT VARIABLES
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
+const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
+const GRAPH_API_VERSION = process.env.GRAPH_API_VERSION || "v24.0";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
+// Gemini automatic fallback models
+const GEMINI_MODELS = [
+  "gemini-3.5-flash-lite",
+  "gemini-3.8-flash",
+  "gemini-3.7-flash",
+  "gemini-3.6-flash",
+  "gemini-3.5-flash",
+  "gemini-3.1-flash-lite"
+];
+
+// SYSTEM PROMPT
+const SYSTEM_PROMPT = `
+Ikaw ang AI assistant ng Pitik ng Apo photography services.
+
+Mga alituntunin:
+- Sumagot sa natural, magalang at friendly na Filipino o Taglish.
+- Panatilihing maikli, malinaw at madaling maintindihan ang sagot.
+- Tulungan ang customer sa kanilang photography inquiries at booking.
+- Magtanong nang paisa-isa kung may kulang na detalye.
+- Huwag mag-imbento ng package, presyo, schedule, availability, pangalan o contact number ng staff.
+- Kung kailangan ng confirmation, sabihin na ipa-check muna sa Pitik ng Apo team.
+- Panatilihin ang naunang impormasyon sa conversation.
+- Huwag sabihin na confirmed ang booking hangga't hindi ito kinukumpirma ng team.
+- Maging professional, helpful at welcoming.
+`;
+
+// GET CONVERSATION HISTORY FROM FIRESTORE
 async function getConversationHistory(senderId) {
   const snapshot = await db
     .collection("conversations")
@@ -32,7 +64,7 @@ async function getConversationHistory(senderId) {
     }));
 }
 
-// Save customer and bot messages
+// SAVE CONVERSATION MESSAGE
 async function saveConversationMessage(senderId, role, text) {
   await db
     .collection("conversations")
@@ -45,44 +77,164 @@ async function saveConversationMessage(senderId, role, text) {
     });
 }
 
-const PORT = process.env.PORT || 3000;
+// DELAY FUNCTION
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
-const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
-const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
-const GRAPH_API_VERSION = process.env.GRAPH_API_VERSION;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+// CHECK TEMPORARY GEMINI ERRORS
+function isTemporaryGeminiError(status) {
+  return [
+    408,
+    404,
+    429,
+    500,
+    502,
+    503,
+    504
+  ].includes(status);
+}
 
-const GEMINI_MODEL = "gemini-3.5-flash-lite";
+// GEMINI AI WITH AUTOMATIC MODEL FALLBACK
+async function generateGeminiReply(conversationHistory) {
 
-const SYSTEM_PROMPT = `
-Ikaw ang friendly at professional na AI customer service assistant
-ng Pitik ng Apo, isang photography service.
+  for (const model of GEMINI_MODELS) {
 
-Mga patakaran:
-- Sumagot nang magalang, natural at madaling maintindihan.
-- Gumamit ng Filipino o Taglish depende sa wika ng customer.
-- Maging helpful, warm at professional.
-- Tumulong sa inquiries tungkol sa photography at event coverage.
-- Magtanong ng event type, date, venue at contact details kung kailangan.
-- Huwag mag-imbento ng presyo, packages, availability o services.
-- Kung walang sapat na impormasyon, sabihin na ipa-confirm ito
-  sa Pitik ng Apo team.
-- Huwag mangako ng booking confirmation.
-- Panatilihing maikli at madaling basahin ang replies.
-`;
+    console.log("Trying Gemini model:", model);
 
+    for (let attempt = 1; attempt <= 2; attempt++) {
+
+      try {
+
+        const controller = new AbortController();
+
+        const timeout = setTimeout(
+          () => controller.abort(),
+          20000
+        );
+
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-goog-api-key": GEMINI_API_KEY
+            },
+            body: JSON.stringify({
+              systemInstruction: {
+                parts: [{ text: SYSTEM_PROMPT }]
+              },
+              contents: conversationHistory,
+              generationConfig: {
+                maxOutputTokens: 200
+              }
+            }),
+            signal: controller.signal
+          }
+        );
+
+        clearTimeout(timeout);
+
+        if (!response.ok) {
+
+          const errorText = await response.text();
+
+          console.error(
+            `Gemini ${model} error (${response.status}):`,
+            errorText
+          );
+
+          if (isTemporaryGeminiError(response.status)) {
+            break;
+          }
+
+          return "Pasensya na po, may pansamantalang problema sa aming AI assistant. Maaari po ba kayong mag-message muli mamaya?";
+        }
+
+        const data = await response.json();
+
+        const reply =
+          data.candidates?.[0]?.content?.parts
+            ?.map(part => part.text || "")
+            .join("")
+            .trim();
+
+        if (reply) {
+          console.log("Gemini response successful using:", model);
+          return reply;
+        }
+
+        console.log("No usable response from:", model);
+        break;
+
+      } catch (error) {
+
+        console.error(
+          `Gemini ${model} attempt ${attempt} failed:`,
+          error.message
+        );
+
+        if (attempt < 2) {
+          await delay(2000);
+        }
+      }
+    }
+  }
+
+  console.error("All Gemini models failed.");
+
+  return "Pasensya na po, hindi muna namin makuha ang sagot sa ngayon. Pakisubukan po ulit mamaya. Maraming salamat sa inyong pang-unawa! 😊";
+}
+
+// SEND MESSAGE TO FACEBOOK MESSENGER
+async function sendReply(senderId, message) {
+
+  const url =
+    `https://graph.facebook.com/${GRAPH_API_VERSION}/me/messages?access_token=${PAGE_ACCESS_TOKEN}`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      recipient: {
+        id: senderId
+      },
+      message: {
+        text: message
+      }
+    })
+  });
+
+  const result = await response.json();
+
+  if (!response.ok) {
+    console.error("Messenger send error:", result);
+  }
+
+  return result;
+}
+
+// HTTP SERVER
 const server = http.createServer(async (req, res) => {
 
-  // Meta webhook verification
+  // META WEBHOOK VERIFICATION
   if (req.method === "GET" && req.url.startsWith("/webhook")) {
-    const url = new URL(req.url, `http://${req.headers.host}`);
+
+    const url = new URL(
+      req.url,
+      `http://${req.headers.host}`
+    );
 
     const mode = url.searchParams.get("hub.mode");
     const token = url.searchParams.get("hub.verify_token");
     const challenge = url.searchParams.get("hub.challenge");
 
     if (mode === "subscribe" && token === VERIFY_TOKEN) {
-      res.writeHead(200, { "Content-Type": "text/plain" });
+      console.log("Webhook verified successfully!");
+      res.writeHead(200);
       return res.end(challenge);
     }
 
@@ -90,26 +242,36 @@ const server = http.createServer(async (req, res) => {
     return res.end("Verification failed");
   }
 
-  // Receive Messenger messages
+  // RECEIVE MESSENGER WEBHOOK
   if (req.method === "POST" && req.url === "/webhook") {
+
     let body = "";
 
     req.on("data", chunk => {
-      body += chunk;
+      body += chunk.toString();
     });
 
     req.on("end", async () => {
-      res.writeHead(200, { "Content-Type": "text/plain" });
-      res.end("EVENT_RECEIVED");
 
       try {
-        const data = JSON.parse(body);
-        
-        console.log("MESSENGER WEBHOOK RECEIVED:", JSON.stringify(data));
 
-        if (data.object !== "page") return;
+        const data = JSON.parse(body);
+
+        console.log(
+          "MESSENGER WEBHOOK RECEIVED:",
+          JSON.stringify(data)
+        );
+
+        // Acknowledge Meta immediately
+        res.writeHead(200);
+        res.end("EVENT_RECEIVED");
+
+        if (data.object !== "page") {
+          return;
+        }
 
         for (const entry of data.entry || []) {
+
           for (const event of entry.messaging || []) {
 
             if (
@@ -117,150 +279,69 @@ const server = http.createServer(async (req, res) => {
               event.message.text &&
               !event.message.is_echo
             ) {
-              const customerMessage = event.message.text;
+
               const senderId = event.sender.id;
+              const userMessage = event.message.text;
 
-await sendReply(
-  senderId,
-  "Salamat po sa inyong message! Sandali lang po habang inihahanda namin ang aming sagot. Salamat sa inyong pang-unawa. 😊"
-);
+              // Immediate acknowledgement
+              await sendReply(
+                senderId,
+                "Salamat po sa inyong message! Sandali lang po habang inihahanda namin ang aming sagot. Salamat sa inyong pang-unawa. 😊"
+              );
 
+              // Save user message
+              await saveConversationMessage(
+                senderId,
+                "user",
+                userMessage
+              );
 
-await saveConversationMessage(senderId, "user", customerMessage);
+              // Retrieve conversation history
+              const history =
+                await getConversationHistory(senderId);
 
-const conversationHistory = await getConversationHistory(senderId);
+              // Generate AI reply
+              const aiReply =
+                await generateGeminiReply(history);
 
-const aiReply = await generateGeminiReply(conversationHistory);
+              // Save AI response
+              await saveConversationMessage(
+                senderId,
+                "model",
+                aiReply
+              );
 
-await saveConversationMessage(senderId, "model", aiReply);
-
-await sendReply(senderId, aiReply);
-
+              // Send AI reply
+              await sendReply(
+                senderId,
+                aiReply
+              );
             }
           }
         }
 
       } catch (error) {
-        console.error("Webhook error:", error.message);
+
+        console.error(
+          "Webhook processing error:",
+          error
+        );
+
       }
     });
 
     return;
   }
 
-  res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end("Pitik ng Apo Messenger Bot is running.");
+  res.writeHead(404);
+  res.end("Not found");
 });
 
-
-
-// Generate AI response using Google Gemini
-async function generateGeminiReply(conversationHistory) {
-
-  if (!GEMINI_API_KEY) {
-    console.error("GEMINI_API_KEY is missing.");
-    return "Pasensya na po. May technical issue kami ngayon. Please try again later.";
-  }
-
-  const url =
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
-
-  // Try up to 3 times if Gemini is temporarily busy
-  for (let attempt = 1; attempt <= 3; attempt++) {
-
-    try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": GEMINI_API_KEY
-        },
-        signal: AbortSignal.timeout(30000),
-        body: JSON.stringify({
-          system_instruction: {
-            parts: [{ text: SYSTEM_PROMPT }]
-          },
-        contents: conversationHistory,
-          
-          generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 200
-          }
-        })
-      });
-
-      const result = await response.json();
-
-      if (response.status === 503 && attempt < 3) {
-        console.log(`Gemini is busy. Retrying attempt ${attempt + 1}...`);
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        continue;
-      }
-
-      if (!response.ok) {
-        console.error("Gemini API error:", JSON.stringify(result));
-        return "Pasensya na po. Hindi muna ako makasagot ngayon. Maaari po ba kayong mag-message ulit mamaya?";
-      }
-
-      const reply =
-        result.candidates?.[0]?.content?.parts
-          ?.map(part => part.text || "")
-          .join("")
-          .trim();
-
-      if (!reply) {
-        console.error("Gemini returned an empty response.");
-        return "Pasensya na po. Hindi ko po naintindihan ang inyong message. Maaari po bang ulitin?";
-      }
-
-      return reply;
-
-    } catch (error) {
-      console.error("Gemini connection error:", error.message);
-
-      if (attempt < 3) {
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        continue;
-      }
-    }
-  }
-
-  return "Pasensya na po. Medyo busy ang aming system ngayon. Maaari po ba kayong mag-message ulit mamaya?";
-}
-
-
-
-// Send reply to Facebook Messenger
-async function sendReply(recipientId, messageText) {
-
-  if (!PAGE_ACCESS_TOKEN || !GRAPH_API_VERSION) {
-    console.error("Messenger environment settings are incomplete.");
-    return;
-  }
-
-  const url =
-    `https://graph.facebook.com/${GRAPH_API_VERSION}/me/messages`;
-
-  const response = await fetch(
-    `${url}?access_token=${encodeURIComponent(PAGE_ACCESS_TOKEN)}`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        recipient: { id: recipientId },
-        messaging_type: "RESPONSE",
-        message: { text: messageText }
-      })
-    }
-  );
-
-  if (!response.ok) {
-    console.error("Messenger API error:", await response.text());
-  }
-}
+// START SERVER
+const PORT = process.env.PORT || 10000;
 
 server.listen(PORT, () => {
-  console.log(`Pitik ng Apo Bot running on port ${PORT}`);
+  console.log(
+    `Pitik ng Apo Bot running on port ${PORT}`
+  );
 });
