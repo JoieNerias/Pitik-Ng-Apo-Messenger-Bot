@@ -60,6 +60,8 @@ const server = http.createServer(async (req, res) => {
 
       try {
         const data = JSON.parse(body);
+        
+        console.log("MESSENGER WEBHOOK RECEIVED:", JSON.stringify(data));
 
         if (data.object !== "page") return;
 
