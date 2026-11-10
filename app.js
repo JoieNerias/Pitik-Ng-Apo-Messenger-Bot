@@ -14,6 +14,37 @@ const db = admin.firestore();
 
 console.log("Firebase connected successfully!");
 
+// Customer conversation memory
+async function getConversationHistory(senderId) {
+  const snapshot = await db
+    .collection("conversations")
+    .doc(senderId)
+    .collection("messages")
+    .orderBy("timestamp", "desc")
+    .limit(10)
+    .get();
+
+  return snapshot.docs
+    .reverse()
+    .map(doc => ({
+      role: doc.data().role,
+      parts: [{ text: doc.data().text }]
+    }));
+}
+
+// Save customer and bot messages
+async function saveConversationMessage(senderId, role, text) {
+  await db
+    .collection("conversations")
+    .doc(senderId)
+    .collection("messages")
+    .add({
+      role,
+      text,
+      timestamp: admin.firestore.FieldValue.serverTimestamp()
+    });
+}
+
 const PORT = process.env.PORT || 3000;
 
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
@@ -94,9 +125,17 @@ await sendReply(
   "Salamat po sa inyong message! Sandali lang po habang inihahanda namin ang aming sagot. Salamat sa inyong pang-unawa. 😊"
 );
 
-const aiReply = await generateGeminiReply(customerMessage);
+
+await saveConversationMessage(senderId, "user", customerMessage);
+
+const conversationHistory = await getConversationHistory(senderId);
+
+const aiReply = await generateGeminiReply(conversationHistory);
+
+await saveConversationMessage(senderId, "model", aiReply);
 
 await sendReply(senderId, aiReply);
+
             }
           }
         }
@@ -116,7 +155,7 @@ await sendReply(senderId, aiReply);
 
 
 // Generate AI response using Google Gemini
-async function generateGeminiReply(customerMessage) {
+async function generateGeminiReply(conversationHistory) {
 
   if (!GEMINI_API_KEY) {
     console.error("GEMINI_API_KEY is missing.");
@@ -141,12 +180,8 @@ async function generateGeminiReply(customerMessage) {
           system_instruction: {
             parts: [{ text: SYSTEM_PROMPT }]
           },
-          contents: [
-            {
-              role: "user",
-              parts: [{ text: customerMessage }]
-            }
-          ],
+        contents: conversationHistory,
+          
           generationConfig: {
             temperature: 0.7,
             maxOutputTokens: 200
