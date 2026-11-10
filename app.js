@@ -101,6 +101,7 @@ await sendReply(senderId, aiReply);
 });
 
 
+
 // Generate AI response using Google Gemini
 async function generateGeminiReply(customerMessage) {
 
@@ -109,59 +110,76 @@ async function generateGeminiReply(customerMessage) {
     return "Pasensya na po. May technical issue kami ngayon. Please try again later.";
   }
 
-  try {
-    const url =
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+  const url =
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
-   const response = await fetch(url, {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-    "x-goog-api-key": GEMINI_API_KEY
-  },
-  signal: AbortSignal.timeout(20000),
-  body: JSON.stringify({
-    system_instruction: {
-      parts: [{ text: SYSTEM_PROMPT }]
-    },
-    contents: [
-      {
-        role: "user",
-        parts: [{ text: customerMessage }]
+  // Try up to 3 times if Gemini is temporarily busy
+  for (let attempt = 1; attempt <= 3; attempt++) {
+
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": GEMINI_API_KEY
+        },
+        signal: AbortSignal.timeout(30000),
+        body: JSON.stringify({
+          system_instruction: {
+            parts: [{ text: SYSTEM_PROMPT }]
+          },
+          contents: [
+            {
+              role: "user",
+              parts: [{ text: customerMessage }]
+            }
+          ],
+          generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: 200
+          }
+        })
+      });
+
+      const result = await response.json();
+
+      if (response.status === 503 && attempt < 3) {
+        console.log(`Gemini is busy. Retrying attempt ${attempt + 1}...`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        continue;
       }
-    ],
-    generationConfig: {
-      temperature: 0.7,
-      maxOutputTokens: 200
+
+      if (!response.ok) {
+        console.error("Gemini API error:", JSON.stringify(result));
+        return "Pasensya na po. Hindi muna ako makasagot ngayon. Maaari po ba kayong mag-message ulit mamaya?";
+      }
+
+      const reply =
+        result.candidates?.[0]?.content?.parts
+          ?.map(part => part.text || "")
+          .join("")
+          .trim();
+
+      if (!reply) {
+        console.error("Gemini returned an empty response.");
+        return "Pasensya na po. Hindi ko po naintindihan ang inyong message. Maaari po bang ulitin?";
+      }
+
+      return reply;
+
+    } catch (error) {
+      console.error("Gemini connection error:", error.message);
+
+      if (attempt < 3) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        continue;
+      }
     }
-  })
-});
-
-    const result = await response.json();
-
-    if (!response.ok) {
-      console.error("Gemini API error:", JSON.stringify(result));
-      return "Pasensya na po. Hindi muna ako makasagot ngayon. Maaari po ba kayong mag-message ulit mamaya?";
-    }
-
-    const reply =
-      result.candidates?.[0]?.content?.parts
-        ?.map(part => part.text || "")
-        .join("")
-        .trim();
-
-    if (!reply) {
-      console.error("Gemini returned an empty response.");
-      return "Pasensya na po. Hindi ko po naintindihan ang inyong message. Maaari po bang ulitin?";
-    }
-
-    return reply;
-
-  } catch (error) {
-    console.error("Gemini connection error:", error.message);
-    return "Pasensya na po. May connection issue kami ngayon. Please try again later.";
   }
+
+  return "Pasensya na po. Medyo busy ang aming system ngayon. Maaari po ba kayong mag-message ulit mamaya?";
 }
+
 
 
 // Send reply to Facebook Messenger
