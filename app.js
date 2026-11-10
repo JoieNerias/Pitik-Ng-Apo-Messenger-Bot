@@ -76,11 +76,14 @@ const server = http.createServer(async (req, res) => {
               const customerMessage = event.message.text;
               const senderId = event.sender.id;
 
-              const aiReply = await generateGeminiReply(
-                customerMessage
-              );
+await sendReply(
+  senderId,
+  "Salamat po sa inyong message! Sandali lang po habang inihahanda namin ang aming sagot. Salamat sa inyong pang-unawa. 😊"
+);
 
-              await sendReply(senderId, aiReply);
+const aiReply = await generateGeminiReply(customerMessage);
+
+await sendReply(senderId, aiReply);
             }
           }
         }
