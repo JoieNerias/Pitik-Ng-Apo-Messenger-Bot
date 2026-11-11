@@ -660,20 +660,29 @@ async function processMessage(senderId, userMessage) {
   await sendReply(senderId, aiReply);
 }
 
+
 // HTTP SERVER
 const server = http.createServer((req, res) => {
 
+  const requestUrl = new URL(
+    req.url,
+    `http://${req.headers.host || "localhost"}`
+  );
+
+  console.log(
+    "INCOMING REQUEST:",
+    req.method,
+    requestUrl.pathname
+  );
+
   // META WEBHOOK VERIFICATION
-  if (req.method === "GET" && req.url.startsWith("/webhook")) {
-
-    const url = new URL(
-      req.url,
-      `http://${req.headers.host}`
-    );
-
-    const mode = url.searchParams.get("hub.mode");
-    const token = url.searchParams.get("hub.verify_token");
-    const challenge = url.searchParams.get("hub.challenge");
+  if (
+    req.method === "GET" &&
+    requestUrl.pathname === "/webhook"
+  ) {
+    const mode = requestUrl.searchParams.get("hub.mode");
+    const token = requestUrl.searchParams.get("hub.verify_token");
+    const challenge = requestUrl.searchParams.get("hub.challenge");
 
     if (mode === "subscribe" && token === VERIFY_TOKEN) {
       console.log("Webhook verified successfully!");
@@ -686,7 +695,10 @@ const server = http.createServer((req, res) => {
   }
 
   // MESSENGER WEBHOOK
-  if (req.method === "POST" && req.url === "/webhook") {
+  if (
+    req.method === "POST" &&
+    requestUrl.pathname === "/webhook"
+  ) {
     console.log("WEBHOOK POST RECEIVED!");
 
     let body = "";
@@ -696,7 +708,6 @@ const server = http.createServer((req, res) => {
     });
 
     req.on("end", () => {
-
       let data;
 
       try {
@@ -709,6 +720,8 @@ const server = http.createServer((req, res) => {
 
       res.writeHead(200);
       res.end("EVENT_RECEIVED");
+
+      console.log("WEBHOOK OBJECT:", data.object);
 
       if (data.object !== "page") {
         return;
