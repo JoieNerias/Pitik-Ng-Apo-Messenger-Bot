@@ -553,7 +553,7 @@ Reply NO to cancel.
         venue: session.venue,
         digitalPhotoDelivery: session.delivery,
         basePrice: selectedPackage.price,
-        additionalHours: session.extraHours,
+        additionalHours: session.extraHours ?? 0,
         estimatedPrice: session.estimatedPrice,
         priceStatus: "Subject to change",
         bookingStatus: "Pending team review",
