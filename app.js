@@ -850,14 +850,20 @@ const server = http.createServer((req, res) => {
       res.writeHead(200);
       res.end("EVENT_RECEIVED");
 
-      console.log("[WEBHOOK] Object:", data.object);
+      console.log(
+  "[WEBHOOK RAW]",
+  JSON.stringify(data, null, 2)
+);
 
       if (data.object !== "page") {
         console.log("[WEBHOOK] Ignored non-page event");
         return;
       }
 
-      for (const entry of data.entry || []) {
+     console.log(
+  "[FULL EVENT]",
+  JSON.stringify(data, null, 2)
+);
         for (const event of entry.messaging || []) {
           const senderId = event.sender?.id;
 
