@@ -687,6 +687,7 @@ const server = http.createServer((req, res) => {
 
   // MESSENGER WEBHOOK
   if (req.method === "POST" && req.url === "/webhook") {
+    console.log("WEBHOOK POST RECEIVED!");
 
     let body = "";
 
