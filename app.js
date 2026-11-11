@@ -2,6 +2,14 @@
 const http = require("http");
 const admin = require("firebase-admin");
 
+// ==========================================
+// 1. FIREBASE INITIALIZATION
+// ==========================================
+
+if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
+  throw new Error("FIREBASE_SERVICE_ACCOUNT is missing!");
+}
+
 const serviceAccount = JSON.parse(
   process.env.FIREBASE_SERVICE_ACCOUNT
 );
@@ -12,12 +20,26 @@ admin.initializeApp({
 
 const db = admin.firestore();
 
-console.log("Firebase connected successfully!");
+console.log("[FIREBASE] Connected successfully!");
+
+// ==========================================
+// 2. ENVIRONMENT VARIABLES
+// ==========================================
 
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
 const GRAPH_API_VERSION = process.env.GRAPH_API_VERSION || "v24.0";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
+const PORT = process.env.PORT || 10000;
+
+if (!VERIFY_TOKEN) console.error("[CONFIG] VERIFY_TOKEN is missing!");
+if (!PAGE_ACCESS_TOKEN) console.error("[CONFIG] PAGE_ACCESS_TOKEN is missing!");
+if (!GEMINI_API_KEY) console.error("[CONFIG] GEMINI_API_KEY is missing!");
+
+// ==========================================
+// 3. GEMINI MODELS
+// ==========================================
 
 const GEMINI_MODELS = [
   "gemini-3.5-flash-lite",
@@ -37,23 +59,46 @@ Huwag mag-imbento ng presyo, package, availability,
 pangalan, contact number o staff details.
 Huwag mag-confirm ng booking.
 Ang final quotation at schedule ay kailangang kumpirmahin ng team.
-Kung may aktibong booking inquiry, sundin ang booking process
-ng system at huwag gumawa ng ibang booking details.
+
+AVAILABLE PACKAGES:
+
+Package 1: Birthday / Binyag
+₱2,500 for 2 hours.
+
+Package 2: Community / Corporate Events
+₱3,500 for 4 hours.
+
+Package 3: Sports Photography - COMING SOON.
+Walang confirmed price.
+
+Photo Printing Service - COMING SOON.
+Walang confirmed price.
+
+Walang automatic additional-hour pricing.
+Ang final quotation ay manggagaling sa Pitik ng Apo team.
+
+Digital photo delivery:
+Google Drive o Pitik ng Apo Facebook Page.
+Allow 2–3 days processing after the event.
+
+Lahat ng booking ay inquiry lamang at hindi confirmed
+hanggang makumpirma ng Pitik ng Apo team.
 `;
 
-// PACKAGE INFORMATION
+// ==========================================
+// 4. PACKAGE INFORMATION
+// ==========================================
+
 const PACKAGES = {
   "1": {
     name: "Birthday / Binyag",
     price: 2500,
-    includedHours: 2,
-    extraRate: 500
+    includedHours: 2
   },
   "2": {
     name: "Community / Corporate Events",
     price: 3500,
-    includedHours: 4,
-    extraRate: 250
+    includedHours: 4
   }
 };
 
@@ -63,31 +108,30 @@ const PACKAGE_MENU = `
 PACKAGE 1 – Birthday / Binyag
 ₱2,500
 2 hours coverage
-Additional hour: ₱500/hour
 
 PACKAGE 2 – Community / Corporate Events
 ₱3,500
 4 hours coverage
-Additional hour: ₱250/hour
 
 PACKAGE 3 – Sports Photography
-₱1,000 per game
 COMING SOON
 
 PHOTO PRINTING SERVICE
 COMING SOON
 
 IMPORTANT:
-All prices are subject to change depending on
-event time, duration requirements and location.
-Final quotation is subject to team confirmation.
+All prices are subject to change.
+Final quotation and schedule are subject to team confirmation.
 
-Digital photo delivery is optional through
+Digital photo delivery is available through
 Google Drive or our Facebook Page.
 Allow 2–3 days processing after the event.
 `;
 
-// FIRESTORE CONVERSATION MEMORY
+// ==========================================
+// 5. CONVERSATION MEMORY
+// ==========================================
+
 async function getConversationHistory(senderId) {
   const snapshot = await db
     .collection("conversations")
@@ -115,7 +159,10 @@ async function saveConversationMessage(senderId, role, text) {
     });
 }
 
-// FIRESTORE BOOKING SESSION
+// ==========================================
+// 6. BOOKING SESSION
+// ==========================================
+
 function getSessionRef(senderId) {
   return db.collection("bookingSessions").doc(senderId);
 }
@@ -133,26 +180,29 @@ async function clearBookingSession(senderId) {
   await getSessionRef(senderId).delete();
 }
 
-// DELAY
+// ==========================================
+// 7. DELAY
+// ==========================================
+
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// GEMINI ERROR CHECK
-function isTemporaryGeminiError(status) {
-  return [408, 404, 429, 500, 502, 503, 504].includes(status);
-}
+// ==========================================
+// 8. GEMINI RESPONSE
+// ==========================================
 
-// GEMINI AUTOMATIC MODEL FALLBACK
 async function generateGeminiReply(conversationHistory) {
+  if (!GEMINI_API_KEY) {
+    return "Pasensya na po, hindi muna available ang AI assistant namin. Maaari po kayong mag-message ulit mamaya.";
+  }
 
   for (const model of GEMINI_MODELS) {
-
-    console.log("Trying Gemini model:", model);
+    console.log("[GEMINI] Trying model:", model);
 
     for (let attempt = 1; attempt <= 2; attempt++) {
-
       const controller = new AbortController();
+
       const timeout = setTimeout(
         () => controller.abort(),
         20000
@@ -185,12 +235,13 @@ async function generateGeminiReply(conversationHistory) {
         if (!response.ok) {
           const errorText = await response.text();
 
-          console.error(
-            `Gemini ${model} error (${response.status}):`,
-            errorText
-          );
+          console.error("[GEMINI] API ERROR:", {
+            model,
+            status: response.status,
+            error: errorText
+          });
 
-          if (isTemporaryGeminiError(response.status)) {
+          if ([408, 404, 429, 500, 502, 503, 504].includes(response.status)) {
             break;
           }
 
@@ -205,19 +256,21 @@ async function generateGeminiReply(conversationHistory) {
           .trim();
 
         if (reply) {
-          console.log("Gemini response successful using:", model);
+          console.log("[GEMINI] Successful response:", model);
           return reply;
         }
 
+        console.error("[GEMINI] Empty response:", model);
         break;
 
       } catch (error) {
         clearTimeout(timeout);
 
-        console.error(
-          `Gemini ${model} attempt ${attempt} failed:`,
-          error.message
-        );
+        console.error("[GEMINI] Request failed:", {
+          model,
+          attempt,
+          error: error.message
+        });
 
         if (attempt < 2) {
           await delay(2000);
@@ -226,45 +279,90 @@ async function generateGeminiReply(conversationHistory) {
     }
   }
 
-  console.error("All Gemini models failed.");
+  console.error("[GEMINI] All models failed.");
 
   return "Pasensya na po, hindi muna namin makuha ang sagot sa ngayon. Pakisubukan po ulit mamaya. 😊";
 }
 
-// FACEBOOK MESSENGER SEND REPLY
+// ==========================================
+// 9. FACEBOOK MESSENGER SEND REPLY
+// ==========================================
+
 async function sendReply(senderId, message) {
+  if (!PAGE_ACCESS_TOKEN) {
+    console.error("[MESSENGER] Missing Page Access Token!");
+    return { ok: false };
+  }
 
   const url =
     `https://graph.facebook.com/${GRAPH_API_VERSION}/me/messages?access_token=${PAGE_ACCESS_TOKEN}`;
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      recipient: { id: senderId },
-      message: { text: message }
-    })
-  });
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        recipient: { id: senderId },
+        messaging_type: "RESPONSE",
+        message: { text: message }
+      })
+    });
 
-  const result = await response.json();
+    const rawResult = await response.text();
 
-  if (!response.ok) {
-    console.error("Messenger send error:", result);
+    let result;
+
+    try {
+      result = JSON.parse(rawResult);
+    } catch {
+      result = rawResult;
+    }
+
+    if (!response.ok) {
+      console.error("[MESSENGER] SEND FAILED:", {
+        status: response.status,
+        error: result
+      });
+
+      return {
+        ok: false,
+        status: response.status,
+        error: result
+      };
+    }
+
+    console.log("[MESSENGER] SEND SUCCESS:", {
+      status: response.status,
+      messageId: result.message_id || "No message ID"
+    });
+
+    return {
+      ok: true,
+      status: response.status
+    };
+
+  } catch (error) {
+    console.error("[MESSENGER] NETWORK ERROR:", error.message);
+
+    return {
+      ok: false,
+      error: error.message
+    };
   }
-
-  return result;
 }
 
 async function replyAndSave(senderId, message) {
   await saveConversationMessage(senderId, "model", message);
-  await sendReply(senderId, message);
+  return await sendReply(senderId, message);
 }
 
-// START BOOKING
-async function startBooking(senderId) {
+// ==========================================
+// 10. START BOOKING
+// ==========================================
 
+async function startBooking(senderId) {
   const session = {
     active: true,
     stage: "package",
@@ -276,19 +374,21 @@ async function startBooking(senderId) {
   await replyAndSave(
     senderId,
     PACKAGE_MENU +
-    "\n\nKung nais ninyong mag-inquire o mag-book, piliin lamang:\n1 - Birthday / Binyag\n2 - Community / Corporate Events\n\nPaalala: Hindi pa available for booking ang Package 3."
+    "\n\nKung nais ninyong mag-inquire, piliin lamang:\n\n1 - Birthday / Binyag\n2 - Community / Corporate Events\n\nPaalala: Hindi pa available for booking ang Package 3."
   );
 }
 
-// BOOKING PROCESS
-async function handleBooking(senderId, userMessage) {
+// ==========================================
+// 11. BOOKING PROCESS
+// ==========================================
 
+async function handleBooking(senderId, userMessage) {
   const message = userMessage.trim();
   const lower = message.toLowerCase();
 
   let session = await getBookingSession(senderId);
 
-  // CANCEL BOOKING
+  // CANCEL
   if (
     ["cancel", "cancel booking", "stop", "hinto", "ayaw na"].includes(lower)
   ) {
@@ -306,9 +406,8 @@ async function handleBooking(senderId, userMessage) {
     return false;
   }
 
-  // PACKAGE SELECTION
+  // PACKAGE
   if (session.stage === "package") {
-
     if (message === "3" || lower.includes("sports")) {
       await replyAndSave(
         senderId,
@@ -324,7 +423,7 @@ async function handleBooking(senderId, userMessage) {
     } else {
       await replyAndSave(
         senderId,
-        "Pili lamang po ng available package:\n\n1 - Birthday / Binyag\n2 - Community / Corporate Events"
+        "Pili lamang po ng available package:\n1 - Birthday / Binyag\n2 - Community / Corporate Events"
       );
       return true;
     }
@@ -334,17 +433,16 @@ async function handleBooking(senderId, userMessage) {
 
     await replyAndSave(
       senderId,
-      `Salamat po! Napili ninyo ang Package ${session.package}: ${PACKAGES[session.package].name}.\n\nAno po ang buong pangalan ninyo?`
+      `Salamat po! Napili ninyo ang ${PACKAGES[session.package].name}.\n\nAno po ang buong pangalan ninyo?`
     );
 
     return true;
   }
 
-  // CUSTOMER NAME
+  // NAME
   if (session.stage === "name") {
     session.name = message;
     session.stage = "eventType";
-
     await saveBookingSession(senderId, session);
 
     await replyAndSave(
@@ -359,7 +457,6 @@ async function handleBooking(senderId, userMessage) {
   if (session.stage === "eventType") {
     session.eventType = message;
     session.stage = "date";
-
     await saveBookingSession(senderId, session);
 
     await replyAndSave(
@@ -370,11 +467,10 @@ async function handleBooking(senderId, userMessage) {
     return true;
   }
 
-  // EVENT DATE
+  // DATE
   if (session.stage === "date") {
     session.eventDate = message;
     session.stage = "time";
-
     await saveBookingSession(senderId, session);
 
     await replyAndSave(
@@ -385,16 +481,15 @@ async function handleBooking(senderId, userMessage) {
     return true;
   }
 
-  // EVENT TIME
+  // TIME
   if (session.stage === "time") {
     session.eventTime = message;
     session.stage = "duration";
-
     await saveBookingSession(senderId, session);
 
     await replyAndSave(
       senderId,
-      "Ilang oras po ang kabuuang photography coverage na kailangan ninyo? Pakilagay po ang bilang ng oras (halimbawa: 3 hours)."
+      "Ilang oras po ang kabuuang photography coverage na kailangan ninyo?"
     );
 
     return true;
@@ -407,14 +502,13 @@ async function handleBooking(senderId, userMessage) {
     if (!Number.isFinite(hours) || hours <= 0) {
       await replyAndSave(
         senderId,
-        "Pakilagay po ang valid na bilang ng oras, halimbawa: 3 hours."
+        "Pakilagay po ang valid na bilang ng oras, halimbawa: 3."
       );
       return true;
     }
 
     session.duration = hours;
     session.stage = "venue";
-
     await saveBookingSession(senderId, session);
 
     await replyAndSave(
@@ -429,7 +523,6 @@ async function handleBooking(senderId, userMessage) {
   if (session.stage === "venue") {
     session.venue = message;
     session.stage = "contact";
-
     await saveBookingSession(senderId, session);
 
     await replyAndSave(
@@ -440,11 +533,10 @@ async function handleBooking(senderId, userMessage) {
     return true;
   }
 
-  // CONTACT NUMBER
+  // CONTACT
   if (session.stage === "contact") {
     session.contact = message;
     session.stage = "delivery";
-
     await saveBookingSession(senderId, session);
 
     await replyAndSave(
@@ -455,9 +547,8 @@ async function handleBooking(senderId, userMessage) {
     return true;
   }
 
-  // DIGITAL PHOTO DELIVERY
+  // DELIVERY
   if (session.stage === "delivery") {
-
     if (message === "1" || lower.includes("drive")) {
       session.delivery = "Google Drive";
     } else if (message === "2" || lower.includes("facebook")) {
@@ -481,20 +572,6 @@ async function handleBooking(senderId, userMessage) {
 
     const selectedPackage = PACKAGES[session.package];
 
-    const extraHours = Math.max(
-      0,
-      session.duration - selectedPackage.includedHours
-    );
-
-    const extraCharge =
-      extraHours * selectedPackage.extraRate;
-
-    const estimatedPrice =
-      selectedPackage.price + extraCharge;
-
-    session.extraHours = extraHours;
-    session.estimatedPrice = estimatedPrice;
-
     const summary = `
 📸 PITIK NG APO - BOOKING INQUIRY SUMMARY
 
@@ -510,13 +587,10 @@ Contact: ${session.contact}
 Digital photo delivery: ${session.delivery}
 
 Base package price: ₱${selectedPackage.price.toLocaleString("en-PH")}
-Additional hours: ${extraHours}
-Estimated additional charge: ₱${extraCharge.toLocaleString("en-PH")}
-Estimated total: ₱${estimatedPrice.toLocaleString("en-PH")}
 
 IMPORTANT:
-All prices are subject to change depending on event time, duration and location.
 Final quotation and schedule are subject to team confirmation.
+Walang automatic additional-hour computation.
 Digital photos require 2–3 days processing after the event.
 Photo Printing Service is coming soon.
 
@@ -527,17 +601,14 @@ Reply NO to cancel.
 `;
 
     await replyAndSave(senderId, summary);
-
     return true;
   }
 
-  // CUSTOMER CONFIRMATION
+  // CONFIRMATION
   if (session.stage === "confirm") {
-
     if (
       ["yes", "oo", "confirm", "confirmed", "tama"].includes(lower)
     ) {
-
       const selectedPackage = PACKAGES[session.package];
 
       const bookingData = {
@@ -553,9 +624,7 @@ Reply NO to cancel.
         venue: session.venue,
         digitalPhotoDelivery: session.delivery,
         basePrice: selectedPackage.price,
-        additionalHours: session.extraHours ?? 0,
-        estimatedPrice: session.estimatedPrice,
-        priceStatus: "Subject to change",
+        priceStatus: "Subject to team confirmation",
         bookingStatus: "Pending team review",
         createdAt: admin.firestore.FieldValue.serverTimestamp()
       };
@@ -568,11 +637,10 @@ Reply NO to cancel.
 
       await replyAndSave(
         senderId,
-        `Maraming salamat po! Na-save na ang inyong booking inquiry.\n\nReference ID: ${bookingRef.id}\n\nAng inyong inquiry ay naghihintay pa ng review at confirmation ng Pitik ng Apo team. Hindi pa po ito confirmed booking.\n\nAng final quotation at availability ay depende sa event time, duration at location. Maghihintay po kayo ng follow-up mula sa aming team. 😊`
+        `Maraming salamat po! Na-save na ang inyong booking inquiry.\n\nReference ID: ${bookingRef.id}\n\nAng inyong inquiry ay naghihintay pa ng review at confirmation ng Pitik ng Apo team. Hindi pa po ito confirmed booking.\n\nMaghihintay po kayo ng follow-up mula sa aming team. 😊`
       );
 
-      console.log("Booking inquiry saved:", bookingRef.id);
-
+      console.log("[BOOKING] Inquiry saved:", bookingRef.id);
       return true;
     }
 
@@ -595,16 +663,21 @@ Reply NO to cancel.
     return true;
   }
 
-  return false;
+  return true;
 }
 
-// PROCESS MESSENGER MESSAGE
-async function processMessage(senderId, userMessage) {
+// ==========================================
+// 12. PROCESS CUSTOMER MESSAGE
+// ==========================================
 
-  await sendReply(
-    senderId,
-    "Salamat po sa inyong message! Sandali lang po habang inihahanda namin ang aming sagot. Salamat sa inyong pang-unawa. 😊"
-  );
+async function processMessage(senderId, userMessage) {
+  const shortSender = String(senderId).slice(-4);
+
+  console.log("[PROCESS] Started:", {
+    sender: shortSender,
+    messageLength: userMessage.length,
+    time: new Date().toISOString()
+  });
 
   await saveConversationMessage(
     senderId,
@@ -615,6 +688,8 @@ async function processMessage(senderId, userMessage) {
   const activeSession = await getBookingSession(senderId);
 
   if (activeSession && activeSession.active) {
+    console.log("[PROCESS] Active booking session:", shortSender);
+
     await handleBooking(senderId, userMessage);
     return;
   }
@@ -630,6 +705,7 @@ async function processMessage(senderId, userMessage) {
     "packages",
     "rates",
     "presyo",
+    "magkano",
     "quotation",
     "inquire",
     "inquiry",
@@ -642,38 +718,89 @@ async function processMessage(senderId, userMessage) {
   );
 
   if (isBookingIntent) {
+    console.log("[PROCESS] Booking intent detected:", shortSender);
     await startBooking(senderId);
     return;
   }
 
-  // NORMAL AI CONVERSATION
-  const history = await getConversationHistory(senderId);
+  console.log("[PROCESS] Sending message to Gemini:", shortSender);
 
+  const history = await getConversationHistory(senderId);
   const aiReply = await generateGeminiReply(history);
 
-  await saveConversationMessage(
-    senderId,
-    "model",
-    aiReply
-  );
+  await replyAndSave(senderId, aiReply);
 
-  await sendReply(senderId, aiReply);
+  console.log("[PROCESS] Completed:", shortSender);
 }
 
+// ==========================================
+// 13. PER-SENDER MESSAGE QUEUE
+// ==========================================
 
-// HTTP SERVER
+const senderQueues = new Map();
+const processedMessageIds = new Set();
+
+function queueMessage(senderId, message, messageId) {
+  if (messageId) {
+    if (processedMessageIds.has(messageId)) {
+      console.log("[QUEUE] Duplicate message ignored");
+      return;
+    }
+
+    processedMessageIds.add(messageId);
+
+    if (processedMessageIds.size > 5000) {
+      const oldest = processedMessageIds.values().next().value;
+      processedMessageIds.delete(oldest);
+    }
+  }
+
+  const previous = senderQueues.get(senderId) || Promise.resolve();
+
+  const current = previous
+    .catch(error => {
+      console.error("[QUEUE] Previous task error:", error.message);
+    })
+    .then(() => processMessage(senderId, message))
+    .catch(error => {
+      console.error("[PROCESS] FAILED:", {
+        sender: String(senderId).slice(-4),
+        error: error.stack || error.message
+      });
+    });
+
+  senderQueues.set(senderId, current);
+
+  current.finally(() => {
+    if (senderQueues.get(senderId) === current) {
+      senderQueues.delete(senderId);
+    }
+  });
+}
+
+// ==========================================
+// 14. HTTP SERVER
+// ==========================================
+
 const server = http.createServer((req, res) => {
-
   const requestUrl = new URL(
     req.url,
     `http://${req.headers.host || "localhost"}`
   );
 
-  console.log(
-    "INCOMING REQUEST:",
-    req.method,
-    requestUrl.pathname
-  );
+  console.log("[HTTP]", req.method, requestUrl.pathname);
+
+  // HEALTH CHECK
+  if (
+    req.method === "GET" &&
+    requestUrl.pathname === "/"
+  ) {
+    res.writeHead(200, {
+      "Content-Type": "text/plain"
+    });
+
+    return res.end("Pitik ng Apo Bot is running.");
+  }
 
   // META WEBHOOK VERIFICATION
   if (
@@ -685,11 +812,12 @@ const server = http.createServer((req, res) => {
     const challenge = requestUrl.searchParams.get("hub.challenge");
 
     if (mode === "subscribe" && token === VERIFY_TOKEN) {
-      console.log("Webhook verified successfully!");
+      console.log("[WEBHOOK] Verification successful");
       res.writeHead(200);
       return res.end(challenge);
     }
 
+    console.error("[WEBHOOK] Verification failed");
     res.writeHead(403);
     return res.end("Verification failed");
   }
@@ -699,7 +827,7 @@ const server = http.createServer((req, res) => {
     req.method === "POST" &&
     requestUrl.pathname === "/webhook"
   ) {
-    console.log("WEBHOOK POST RECEIVED!");
+    console.log("[WEBHOOK] POST RECEIVED");
 
     let body = "";
 
@@ -713,35 +841,56 @@ const server = http.createServer((req, res) => {
       try {
         data = JSON.parse(body);
       } catch (error) {
-        console.error("Invalid webhook JSON:", error);
+        console.error("[WEBHOOK] Invalid JSON:", error.message);
         res.writeHead(400);
         return res.end("Invalid JSON");
       }
 
+      // Acknowledge Meta immediately
       res.writeHead(200);
       res.end("EVENT_RECEIVED");
 
-      console.log("WEBHOOK OBJECT:", data.object);
+      console.log("[WEBHOOK] Object:", data.object);
 
       if (data.object !== "page") {
+        console.log("[WEBHOOK] Ignored non-page event");
         return;
       }
 
       for (const entry of data.entry || []) {
         for (const event of entry.messaging || []) {
+          const senderId = event.sender?.id;
+
+          const shortSender = senderId
+            ? String(senderId).slice(-4)
+            : "UNKNOWN";
+
+          console.log("[WEBHOOK] Event:", {
+            sender: shortSender,
+            hasMessage: !!event.message,
+            hasText: typeof event.message?.text === "string",
+            isEcho: event.message?.is_echo === true,
+            hasPostback: !!event.postback,
+            hasDelivery: !!event.delivery,
+            hasRead: !!event.read
+          });
 
           if (
             event.message &&
-            event.message.text &&
-            !event.message.is_echo
+            typeof event.message.text === "string" &&
+            event.message.is_echo !== true &&
+            senderId
           ) {
-            const senderId = event.sender.id;
-            const userMessage = event.message.text;
+            console.log("[WEBHOOK] CUSTOMER TEXT DETECTED");
 
-            processMessage(senderId, userMessage)
-              .catch(error => {
-                console.error("Message processing error:", error);
-              });
+            queueMessage(
+              senderId,
+              event.message.text,
+              event.message.mid
+            );
+
+          } else {
+            console.log("[WEBHOOK] Event ignored");
           }
         }
       }
@@ -754,9 +903,10 @@ const server = http.createServer((req, res) => {
   res.end("Not found");
 });
 
-// START SERVER
-const PORT = process.env.PORT || 10000;
+// ==========================================
+// 15. START SERVER
+// ==========================================
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`Pitik ng Apo Bot running on port ${PORT}`);
+  console.log(`[SERVER] Pitik ng Apo Bot running on port ${PORT}`);
 });
